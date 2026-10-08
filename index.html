@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FIRE Manager</title>
+<meta name="description" content="Personal FIRE planner. Your data stays on your device.">
+<meta name="theme-color" content="#0f766e">
+<meta name="robots" content="noindex, nofollow">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icon-192.png">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<link rel="stylesheet" href="./style.css">
+<script src="./vendor/chart.umd.js" defer></script>
+</head>
+<body>
+<div id="root"><div class="card empty" style="margin:60px auto">Loading…</div></div>
+<div id="toast"></div>
+<input type="file" id="importFile" accept=".json,application/json" hidden>
+<script type="module" src="./app.js"></script>
+<noscript>FIRE Manager needs JavaScript.</noscript>
+</body>
+</html>

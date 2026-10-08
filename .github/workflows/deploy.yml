@@ -1,0 +1,37 @@
+name: Publish app + daily VWCE price
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "30 17 * * 1-5"   # weekdays, after the XETRA close
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pages
+        uses: actions/configure-pages@v5
+      - name: Fetch today's VWCE price (keeps the previous one if it fails)
+        env:
+          PAGES_URL: ${{ steps.pages.outputs.base_url }}
+        run: python3 .github/update_price.py
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+      - id: deployment
+        uses: actions/deploy-pages@v4
