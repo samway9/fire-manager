@@ -246,9 +246,10 @@ export class Calc {
       }
       steps.push(step);
     }
-    const keep = group(spend.filter(c => c.payVia !== 'transfer' && c.payVia !== 'cash'));
-    const total = cats.reduce((t, c) => t + amt(c), 0);
-    return {inc, steps, keep, salName: sal ? sal.name : 'salary account', left: inc - total, day: Math.trunc(num(this.s.salaryDay)) || 10};
+    const keep = group(spend.filter(c => !['transfer', 'cash', 'pot'].includes(c.payVia)));
+    const fromPots = spend.filter(c => c.payVia === 'pot').map(c => ({name: c.name, amt: amt(c), account: c.fromAccount && accs[c.fromAccount] ? accs[c.fromAccount].name : 'savings'}));
+    const total = cats.filter(c => !(c.kind === 'spend' && c.payVia === 'pot')).reduce((t, c) => t + amt(c), 0);
+    return {inc, steps, keep, fromPots, salName: sal ? sal.name : 'salary account', left: inc - total, day: Math.trunc(num(this.s.salaryDay)) || 10};
   }
   monthlyPlanRows() {
     const k = monthKey(this.today), m = this.S.budget.months[k];
@@ -258,6 +259,67 @@ export class Calc {
       return {name: c.name, kind: c.kind, amt: jsRound(explicit ? num(m.alloc[c.id]) : this.catTargetPln(c, inc))};
     });
     return {inc, rows, left: inc - rows.reduce((t, r) => t + r.amt, 0), fromBudget: !!m, k};
+  }
+
+  // ---------- year-end outlook (port of Calc.forecast) ----------
+  cashPln() { return this.S.accounts.filter(a => !a.broker).reduce((t, a) => t + this.accPln(a), 0); }
+  forecast(until) {
+    const end = until || `${this.today.slice(0, 4)}-12-31`;
+    const P = JSON.parse(JSON.stringify(this.S));
+    const accs = Object.fromEntries(P.accounts.map(a => [a.id, a])), cats = P.budget.categories;
+    const sal = P.accounts.find(a => a.salary) || null, broker = P.accounts.find(a => a.broker) || null;
+    const price = num(P.market.price), day = Math.trunc(num(this.s.salaryDay)) || 10;
+    const move = (acc, pln) => { if (acc) acc.balance = num(acc.balance) + this.conv(pln, 'PLN', acc.ccy); };
+    const rows = [], snaps = {}, last = monthKey(end);
+    let k = monthKey(this.today);
+    while (k <= last) {
+      const m = P.budget.months[k];
+      const inc = m ? new Calc(P, this.today).monthIncomePln(k) : this.salaryPln();
+      const alloc = m ? m.alloc : this.proposedAlloc(inc);
+      const income = (k === monthKey(this.today) && +this.today.slice(8, 10) >= day) ? 0 : inc;
+      move(sal, income);
+      let spend = 0, pot = 0, saved = 0, invested = 0;
+      for (const c of cats) {
+        const a = num(alloc[c.id] ?? 0);
+        if (a <= 0 || (c.kind === 'spend' && c.payVia === 'pot')) continue;
+        if (c.kind === 'spend') { move(sal, -a); spend += a; continue; }
+        let dest = c.toAccount && accs[c.toAccount] ? accs[c.toAccount] : null;
+        if (dest === null && c.kind === 'invest') dest = broker;
+        if (dest !== null && dest !== sal) { move(sal, -a); move(dest, a); }
+        if (c.kind === 'invest') invested += a; else saved += a;
+      }
+      for (const g of P.goals) {
+        if (!g.autoEF && g.funding === 'cash' && (g.targetDate || '').slice(0, 7) === k) snaps[g.id] = new Calc(P, this.today).goalCalc(g);
+      }
+      for (const c of cats) {
+        const a = num(alloc[c.id] ?? 0);
+        if (a > 0 && c.kind === 'spend' && c.payVia === 'pot') { move((c.fromAccount && accs[c.fromAccount]) || sal, -a); pot += a; }
+      }
+      let bought = 0;
+      if (broker && price > 0) {
+        bought = Math.floor(this.conv(num(broker.balance), broker.ccy, 'EUR') / price);
+        if (bought > 0) {
+          broker.balance = num(broker.balance) - this.conv(bought * price, 'EUR', broker.ccy);
+          P.lots.push({id: `forecast-${k}`, date: `${k}-${pad(Math.min(day, 28))}`, shares: bought, price, ccy: 'EUR', est: false});
+        }
+      }
+      const pc = new Calc(P, this.today);
+      rows.push({k, planned: !!m, income, spend, potSpend: pot, saved, invested, sharesBought: bought, cashEnd: pc.cashPln(), salaryEnd: sal ? pc.accPln(sal) : 0});
+      k = monthKey(addMonths(k + '-01', 1));
+    }
+    const E = new Calc(P, end), unlocks = [];
+    for (const a of P.accounts) {
+      const ru = parseDate(a.rateUntil);
+      if (a.role === 'ef' && a.instant === false && ru && end < ru && ru <= addMonths(end, 2) && Calc.counts(a)) unlocks.push({name: a.name, date: a.rateUntil, pln: E.accPln(a)});
+    }
+    const efT = num(this.s.efTargetPLN);
+    return {end, rows, accounts: P.accounts.map(a => ({name: a.name, ccy: a.ccy, balance: num(a.balance), pln: E.accPln(a), role: a.role})),
+      cashStart: this.cashPln(), cashEnd: E.cashPln(), sharesStart: this.vwce().sh, sharesEnd: E.vwce().sh,
+      netWorthStart: this.netWorthRep(), netWorthEnd: E.netWorthRep(), invested: rows.reduce((t, r) => t + r.invested, 0),
+      efEnd: E.efTotalPln(), liqEnd: E.liquidEfPln(), lockedEnd: E.lockedEfPln(), efT, liqT: num(this.s.liquidTargetPLN),
+      unlocks, excessAfterUnlock: unlocks.length ? Math.max(0, E.efTotalPln() - efT) : 0,
+      goals: P.goals.filter(g => !g.autoEF && g.funding === 'cash').map(g => ({name: g.name, ccy: g.ccy, targetDate: g.targetDate || '', ...(snaps[g.id] || E.goalCalc(g))})),
+      price};
   }
 }
 
@@ -355,6 +417,33 @@ export function advise(c, amount, ccy = 'PLN') {
   const bad = lines.flatMap(l => policyViolations(l, names));
   if (bad.length) return {status: 'policy_error', lines: [], ask: 'Advice text failed the policy check and was withheld.', debug: bad};
   return {status: 'ok', plan: p, lines, warnings, availPLN: avail};
+}
+
+
+export function forecastLines(c, f) {
+  const P = v => fmt(v, 'PLN', 0), end = f.end, rc = c.rc;
+  const d = f.netWorthEnd - f.netWorthStart, bought = f.sharesEnd - f.sharesStart;
+  const out = [`Following your Budget, on ${end} you'd hold ${P(f.cashEnd)} in cash and ${fmtN(f.sharesEnd, 2)} VWCE shares ` +
+    `(+${fmtN(Math.max(0, bought), 2)}). Net worth ${fmt(f.netWorthStart, rc, 0)} → ${fmt(f.netWorthEnd, rc, 0)} ` +
+    `(${d >= 0 ? '+' : '-'}${fmt(Math.abs(d), rc, 0)} saved; prices kept at today's €${fmtN(f.price, 2, true)}).`];
+  for (const r of f.rows) if (r.salaryEnd < -0.5) out.push(`${monthLabel(r.k)}: the salary account would go ${P(-r.salaryEnd)} below zero — trim that month's plan.`);
+  if (f.liqEnd + 0.5 >= f.liqT) out.push(`Instant-access reserve reaches its ${P(f.liqT)} target (${P(f.liqEnd)}).`);
+  else out.push(`Instant-access reserve ends at ${P(f.liqEnd)} of ${P(f.liqT)} — add ${P(f.liqT - f.liqEnd)} to the Reserve top-up line in the Budget.`);
+  for (const u of f.unlocks) {
+    let msg = `On ${u.date} ${u.name} unlocks (${P(u.pln)}).`;
+    if (f.excessAfterUnlock > 0.5) msg += ` Your reserve would then be ${P(f.efEnd)} against a ${P(f.efT)} target — ${P(f.excessAfterUnlock)} above it.` +
+      ' Your rules: keep the reserve at target; the extra goes to VWCE in one order, or to a near-term cash goal.';
+    out.push(msg);
+  }
+  for (const g of f.goals) {
+    if (!g.targetDate || g.targetDate > end) continue;
+    if (g.pct >= 1) out.push(`${g.name}: fully funded by ${g.targetDate} ✓`);
+    else out.push(`${g.name} would be at ${fmt(g.saved, g.ccy, 0)} of ${fmt(g.saved + g.remaining, g.ccy, 0)} on ${g.targetDate} — ${fmt(g.remaining, g.ccy, 0)} short.`);
+  }
+  const unplanned = f.rows.filter(r => !r.planned).map(r => monthLabel(r.k));
+  if (unplanned.length) out.push(`${unplanned.join(', ')}: no budget yet — your category targets were used.`);
+  const names = c.S.accounts.map(a => a.name).concat(c.S.goals.map(g => g.name));
+  return out.filter(l => policyViolations(l, names).length === 0);
 }
 
 // ---------- investment policy ----------
@@ -458,7 +547,7 @@ export const ACTIONS = {
   accDel(S, a) {
     const acc = find(S.accounts, a.id, 'Account');
     S.accounts.splice(S.accounts.indexOf(acc), 1);
-    for (const x of S.budget.categories.concat(S.goals)) { if (x.toAccount === acc.id) x.toAccount = null; if (x.account === acc.id) x.account = null; }
+    for (const x of S.budget.categories.concat(S.goals)) { if (x.toAccount === acc.id) x.toAccount = null; if (x.account === acc.id) x.account = null; if (x.fromAccount === acc.id) x.fromAccount = null; }
     return `Deleted ${acc.name}.`;
   },
   bEnsure(S, a, today) { ensureMonth(S, monthArg(a), today); return 'Month set up from your targets — adjust anything.'; },
@@ -477,7 +566,8 @@ export const ACTIONS = {
     else if (f === 'kind' && ['spend', 'save', 'invest'].includes(v)) c.kind = v;
     else if (f === 'mode' && ['fixed', 'pct'].includes(v)) c.mode = v;
     else if (f === 'value') c.value = number(v, 'Target', {minimum: 0});
-    else if (f === 'payVia' && ['card', 'cash', 'transfer'].includes(v)) c.payVia = v;
+    else if (f === 'payVia' && ['card', 'cash', 'transfer', 'pot'].includes(v)) c.payVia = v;
+    else if (f === 'fromAccount') { if (v && !S.accounts.some(x => x.id === v)) throw new ActionError('Account not found'); c.fromAccount = v || null; }
     else if (f === 'toAccount') { if (v && !S.accounts.some(x => x.id === v)) throw new ActionError('Account not found'); c.toAccount = v || null; }
     else throw new ActionError('Unknown field');
   },

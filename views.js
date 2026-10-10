@@ -1,5 +1,5 @@
 // Screens. Every ${value} is HTML-escaped unless wrapped in raw() — same safety as the PC app's Jinja autoescape.
-import {Calc, num, fmt, fmtN, monthLabel, dayLabel, monthKey, addMonths, inputValue, parseDate, advise, daysLeft,
+import {Calc, num, fmt, fmtN, monthLabel, dayLabel, monthKey, addMonths, inputValue, parseDate, advise, daysLeft, forecastLines,
         COOLING_OFF_DAYS, MIN_REASON, CCYS, daysBetween} from './core.js';
 
 class Raw { constructor(s) { this.s = s; } toString() { return this.s; } }
@@ -29,6 +29,7 @@ function paydaySteps(p, compact = false) {
     <tr><td class="stepn">${p.steps.length + 1}</td><td><b>Keep for card spending</b> <span class="sm mut">in ${p.salName}</span>${compact ? '' : html`<div class="sm mut">${p.keep.names.join(' + ')}</div>`}</td>
       <td class="rt b nowrap">${P(p.keep.amt)}</td></tr>
   </table>
+  ${(p.fromPots || []).map(x => html`<div class="sm mut">🐷 Paid from ${x.account} (no transfer needed): ${x.name} ${P(x.amt)}</div>`)}
   ${p.left < -0.5 ? html`<div class="flag f-red">Over-allocated by ${P(-p.left)}.</div>` : p.left > 0.5 ? html`<div class="flag f-amber">${P(p.left)} has no job yet.</div>` : ''}`;
 }
 const rulesBanner = () => html`<div class="rules"><b>Your fixed rules</b> (<button class="linkbtn" data-tab="policy">Investment Policy</button>): VWCE only (IE00BK5BQT80) · reserve first · lump sum when cash is available + monthly DCA · near-term goals from cash. This app applies them to your numbers — it never picks instruments and never offers a market view.</div>`;
@@ -53,6 +54,18 @@ function marketCard(S, c, meta) {
     ${(meta.lastRefresh?.results || []).filter(r => !r.ok).map(r => html`<div class="flag f-red">${r.msg}</div>`)}
     <div class="frow"><button class="btn refbtn" data-cmd="refresh">↻ Refresh prices</button>
     <span class="sm mut">Needs internet. If a fetch fails, the old value is kept and you're told. You can also type prices in Settings.</span></div></div>`;
+}
+
+function outlookCard(c) {
+  const f = c.forecast(), lines = forecastLines(c, f);
+  return html`<div class="card" style="border-left:4px solid var(--blue)"><h2>Year-end outlook · ${f.end}</h2>
+    <ul class="outlook">${lines.map(l => html`<li>${l}</li>`)}</ul>
+    <div class="tablewrap"><table style="margin-top:6px"><tr><th>Month</th><th class="rt">Salary in</th><th class="rt">Spent</th><th class="rt">Invested</th><th class="rt">Cash at end</th></tr>
+    ${f.rows.map(r => html`<tr><td>${monthLabel(r.k)}${r.planned ? '' : html` <span class="pill p-mut" style="font-size:10px">targets</span>`}</td>
+      <td class="rt">${r.income ? P(r.income) : '—'}</td><td class="rt">${P(r.spend + r.potSpend)}</td>
+      <td class="rt">${P(r.invested)}${r.sharesBought ? html` <span class="sm mut">(${r.sharesBought} sh)</span>` : ''}</td><td class="rt b">${P(r.cashEnd)}</td></tr>`)}</table></div>
+    <details style="margin-top:8px"><summary>Accounts on ${f.end}</summary><table>${f.accounts.map(a => html`<tr><td>${a.name}</td><td class="rt b">${fmt(a.balance, a.ccy, 0)}</td></tr>`)}</table></details>
+    <div class="sm mut" style="margin-top:6px">If you follow your Budget month by month. Prices and FX kept at today's values — plan arithmetic, not a market view. Change the Budget and this updates.</div></div>`;
 }
 
 // ---------- tabs ----------
@@ -108,6 +121,7 @@ function dash(S, c, meta, params) {
           <td class="rt mut">${fmt(c.conv(a.balance, a.ccy, rc), rc, 0)}</td></tr>`)}</table></div>
     </div>
   </div>
+  ${outlookCard(c)}
   <div class="grid g2">
     <div class="card"><h2>Goals</h2>${S.goals.length ? html`<table>${S.goals.map(g => { const gc = c.goalCalc(g); return html`<tr><td>${g.name}</td>
       <td>${bar(gc.pct, gc.pct >= 1 ? 'g' : '')}</td><td class="rt">${fmt(gc.saved, g.ccy, 0)} / ${fmt(g.target, g.ccy, 0)}</td></tr>`; })}</table>` : html`<div class="mut">No goals yet.</div>`}</div>
@@ -238,7 +252,8 @@ function budget(S, c, meta, params) {
       <td><input class="inline" style="width:160px" value="${cat.name}" data-act="catSet"${da('id', cat.id)} data-field="name"${da('key', 'cat-' + cat.id + '-n')}></td>
       <td class="hide-m"><select data-act="catSet"${da('id', cat.id)} data-field="kind">${opts(['spend', 'save', 'invest'], cat.kind)}</select></td>
       <td class="hide-m">${cat.kind === 'spend'
-        ? html`<select data-act="catSet"${da('id', cat.id)} data-field="payVia">${[['card', '💳 card'], ['transfer', '🏦 transfer'], ['cash', '💵 cash']].map(([v2, l]) => html`<option value="${v2}"${sel(cat.payVia === v2)}>${l}</option>`)}</select>`
+        ? html`<select data-act="catSet"${da('id', cat.id)} data-field="payVia">${[['card', '💳 card'], ['transfer', '🏦 transfer'], ['cash', '💵 cash'], ['pot', '🐷 from savings']].map(([v2, l]) => html`<option value="${v2}"${sel(cat.payVia === v2)}>${l}</option>`)}</select>
+          ${cat.payVia === 'pot' ? html`<select data-act="catSet"${da('id', cat.id)} data-field="fromAccount"><option value="">← which account?</option>${dests.map(acc => html`<option value="${acc.id}"${sel(cat.fromAccount === acc.id)}>← ${acc.name}</option>`)}</select>` : ''}`
         : html`<select data-act="catSet"${da('id', cat.id)} data-field="toAccount"><option value="">→ choose account</option>${dests.map(acc => html`<option value="${acc.id}"${sel(cat.toAccount === acc.id)}>→ ${acc.name}</option>`)}</select>`}</td>
       <td class="rt nowrap hide-m"><input class="num sm inline" inputmode="decimal" value="${inputValue(cat.value)}" data-act="catSet"${da('id', cat.id)} data-field="value"${da('key', 'cat-' + cat.id + '-v')}><select data-act="catSet"${da('id', cat.id)} data-field="mode"><option value="fixed"${sel(cat.mode === 'fixed')}>PLN</option><option value="pct"${sel(cat.mode === 'pct')}>%</option></select></td>
       <td class="rt"><input class="num inline b" inputmode="decimal" value="${inputValue(a)}" data-act="bAlloc"${da('month', k)}${da('id', cat.id)}${da('key', 'al-' + cat.id)}></td>

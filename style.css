@@ -125,3 +125,5 @@ body{padding-bottom:calc(48px + env(safe-area-inset-bottom))}
 .acccard input.num{width:120px}
 .hrow h1{font-size:17px}
 @media(max-width:640px){.hrow h1{font-size:15px}}
+ul.outlook{margin:0;padding-left:18px;line-height:1.65}
+ul.outlook li{margin:2px 0}

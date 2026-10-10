@@ -2,7 +2,7 @@
 import {runAction, ActionError, parseAny, ImportProblem, toExport, summary, emptyState, todayISO, parseFx, parsePriceFile} from './core.js';
 import {renderTab, firstRun} from './views.js';
 
-export const VERSION = '1.0.0+0e0c04';
+export const VERSION = '1.0.0+02e62b';
 const KEY = 'fire.state.v2', META = 'fire.meta.v1', SNAP = 'fire.snap.';
 const FX_URL = 'https://api.frankfurter.dev/v1/latest?from=EUR&to=PLN,USD';
 const root = document.getElementById('root');

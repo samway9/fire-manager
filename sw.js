@@ -1,5 +1,5 @@
 // Offline support: the whole app is cached on the phone. Bump VERSION when any file changes.
-const VERSION = 'fire-0e0c0430f2';
+const VERSION = 'fire-02e62b8e34';
 const FILES = ['./', './index.html', './style.css', './app.js', './core.js', './views.js', './vendor/chart.umd.js',
                './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
